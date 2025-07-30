@@ -1,0 +1,15 @@
+.DS_Store
+venv/
+
+**/*.gz
+**/*.csv
+**/*.tar
+**/*.zip
+
+**/*.gz.*
+**/*.csv.*
+**/*.tar.*
+**/*.zip.*
+
+word2vec_lenta.model
+dict.opcorpora.txt
