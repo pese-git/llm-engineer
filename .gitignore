@@ -13,5 +13,6 @@ venv/
 
 word2vec_lenta.model
 dict.opcorpora.txt
+best_config.json
 
 results_rugpt3_jokes
