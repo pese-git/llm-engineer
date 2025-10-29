@@ -15,3 +15,6 @@ word2vec_lenta.model
 dict.opcorpora.txt
 
 results_rugpt3_jokes
+
+**/data
+**/runs
