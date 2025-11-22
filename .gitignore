@@ -15,3 +15,11 @@ word2vec_lenta.model
 dict.opcorpora.txt
 
 results_rugpt3_jokes
+
+.env
+
+**/runs
+**/workshop_preprocessing_v2.session
+**/workshop_preprocessing_v2.session-journal
+
+**/data/
