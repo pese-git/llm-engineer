@@ -56,6 +56,7 @@ class Workspace:
 
         Поведение:
             • Если файл ранее существовал — вычисляется diff (разница между старым и новым содержимым).
+            • Проверяется, что новый код не пустой, если старый файл не был пустым.
             • Новый код заменяет старый полностью.
             • Возвращается информация о количестве символов и вычисленный diff.
 
@@ -76,6 +77,23 @@ class Workspace:
             Это *не* запись в реальную файловую систему — всё хранится в self.files.
         """
         prev = self.files.get(filename, "")
+        
+        # Защита от перезаписи непустого файла пустым содержимым
+        if prev and not code.strip() and filename == "solution.py":
+            Log.warn(f"Попытка перезаписать непустой файл {filename} пустым содержимым. Операция отклонена.")
+            return {
+                "message": f"error: отказано в перезаписи {filename}",
+                "filename": filename,
+                "error": "Нельзя перезаписывать непустой файл solution.py пустым содержимым",
+                "chars": 0,
+                "diff": ""
+            }
+        
+        # Создаем резервную копию важных файлов в memory
+        if filename == "solution.py" and code.strip():
+            self.memory["backup_solution"] = code
+        
+        # Сохраняем новый код
         self.files[filename] = code
 
         diff = "\n".join(
@@ -206,17 +224,40 @@ class Workspace:
             Агент tester вызывает этот метод после генерации тестов.
             Если тесты прошли успешно — orchestrator может завершить работу системы.
         """
+        # Проверяем, существует ли файл solution.py и не пустой ли он
         code = self.files.get(filename, "")
         if not code:
-            return {
-                "passed": False,
-                "stdout": "",
-                "error": f"Файл {filename} не найден"
-            }
+            # Пытаемся восстановить из резервной копии, если она есть
+            if filename == "solution.py" and "backup_solution" in self.memory:
+                Log.warn(f"Восстанавливаем {filename} из резервной копии")
+                code = self.memory["backup_solution"]
+                self.files[filename] = code
+            else:
+                return {
+                    "passed": False,
+                    "stdout": "",
+                    "error": f"Файл {filename} не найден или пуст"
+                }
+
+        # Проверка функции в solution.py
+        if filename == "solution.py":
+            if "def is_prime" not in code and "def quick_sort" not in code:
+                return {
+                    "passed": False,
+                    "stdout": "",
+                    "error": f"В файле {filename} не обнаружена ожидаемая функция (is_prime или quick_sort)"
+                }
 
         # Если указан файл с тестами, берем код тестов из него
         if test_file and test_file in self.files:
             tests_code = self.files.get(test_file, "")
+            if not tests_code:
+                return {
+                    "passed": False,
+                    "stdout": "",
+                    "error": f"Файл с тестами {test_file} существует, но пуст"
+                }
+            
             Log.info(f"Используются тесты из файла '{test_file}'")
             
             # Проверка, если тесты содержат дубликат функции из solution.py
@@ -240,12 +281,31 @@ class Workspace:
 
         # Если тесты используют unittest, запускаем их отдельно
         if "unittest" in tests_code and "class Test" in tests_code:
+            # Извлекаем код функции из файла решения
+            function_code = code.strip()
+            
+            # Проверяем наличие импорта функции в тестах и заменяем его
+            function_name = re.search(r'def\s+(\w+)', code)
+            if function_name and function_name.group(1):
+                # Заменяем импорт на прямое определение функции
+                tests_code = re.sub(
+                    f"from solution import {function_name.group(1)}", 
+                    function_code, 
+                    tests_code
+                )
+                Log.info(f"Заменен импорт функции {function_name.group(1)} прямым определением")
+                
+                # Если в тесте всё ещё присутствует импорт, добавляем функцию вначале
+                if "from solution import" in tests_code:
+                    tests_code = function_code + "\n\n" + tests_code.replace(f"from solution import {function_name.group(1)}", "")
+                    Log.info(f"Добавлено прямое определение функции {function_name.group(1)} в тесты")
+            
             # Сохраняем модифицированные тесты во временный файл
             temp_test_file = "_temp_test_run.py"
             self.files[temp_test_file] = tests_code
             
-            # Подготавливаем код для запуска юнит-тестов
-            run_code = f"import unittest\nimport {filename.replace('.py', '')}\n\n{tests_code}\n\nif __name__ == '__main__':\n    unittest.main(argv=['first-arg-is-ignored'], exit=False)"
+            # Подготавливаем код для запуска юнит-тестов без импорта
+            run_code = f"import unittest\n\n{function_code}\n\n{tests_code}\n\nif __name__ == '__main__':\n    unittest.main(argv=['first-arg-is-ignored'], exit=False)"
             res = self.run_python(run_code)
         else:
             # Для обычных assert-тестов просто объединяем код
