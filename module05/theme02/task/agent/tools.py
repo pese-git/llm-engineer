@@ -127,26 +127,26 @@ class Tools:
         # ------------------------
         # generate_tests — передача LLM-агенту создания тестов
         # ------------------------
-        if tool_name == "generate_tests":
-            # Агент через LLM сам должен сформировать тесты на основе 
-            # описания задачи и файла решения
-            function_name = args.get("function_name", "")
-            test_file_name = args.get("test_file_name", "tests.py")
-            test_code = args.get("test_code", "")
-            
-            if not test_code:
-                return {
-                    "error": "Необходимо предоставить код тестов в параметре test_code"
-                }
-            
-            result = self.ws.store_code(test_file_name, test_code)
-            Log.info(f"[Tools] Сохранены тесты в файл '{test_file_name}', символов: {result['chars']}")
-            return {
-                "message": f"Тесты сохранены в {test_file_name}",
-                "file_name": test_file_name,
-                "chars": result['chars'],
-                "tests_code": test_code  # Для совместимости с существующим кодом
-            }
+        #if tool_name == "generate_tests":
+        #    # Агент через LLM сам должен сформировать тесты на основе 
+        #    # описания задачи и файла решения
+        #    function_name = args.get("function_name", "")
+        #    test_file_name = args.get("test_file_name", "tests.py")
+        #    test_code = args.get("test_code", "")
+        #    
+        #    if not test_code:
+        #        return {
+        #            "error": "Необходимо предоставить код тестов в параметре test_code"
+        #        }
+        #    
+        #    result = self.ws.store_code(test_file_name, test_code)
+        #    Log.info(f"[Tools] Сохранены тесты в файл '{test_file_name}', символов: {result['chars']}")
+        #    return {
+        #        "message": f"Тесты сохранены в {test_file_name}",
+        #        "file_name": test_file_name,
+        #        "chars": result['chars'],
+        #        "tests_code": test_code  # Для совместимости с существующим кодом
+        #    }
 
         # ------------------------
         # неизвестный инструмент

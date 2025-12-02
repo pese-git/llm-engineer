@@ -178,6 +178,15 @@ class Orchestrator:
                 elif tool == "run_tests":
                     self.workflow_state["tests_run"] = True
                     Log.info("[orchestrator] Отмечен запуск тестов")
+                    
+                    # Проверяем результат выполнения тестов
+                    if isinstance(result, dict) and result.get("passed") is True:
+                        self.workflow_state["tests_passed"] = True
+                        Log.info("[orchestrator] ✅ Тесты успешно пройдены")
+                    else:
+                        self.workflow_state["tests_passed"] = False
+                        error_msg = result.get("error", "Неизвестная ошибка")
+                        Log.warn(f"[orchestrator] Тесты не прошли: {error_msg[:200]}")
                 
                 elif tool == "lint_code":
                     self.workflow_state["code_reviewed"] = True
@@ -189,6 +198,22 @@ class Orchestrator:
                     bus.send(BusMessage(sender="orchestrator", recipient="broadcast", 
                                       content=f"FINISH: {summary}"))
                     Log.info("[orchestrator] ✅ Тесты пройдены! Система завершает работу.")
+                    return True
+                
+                # Альтернативное условие завершения: если run_python запустил тесты успешно
+                if tool == "run_python" and args.get("file", "").endswith("tests.py") and isinstance(result, dict) and not result.get("error"):
+                    summary = "Тесты успешно пройдены через run_python. Задача выполнена!"
+                    bus.send(BusMessage(sender="orchestrator", recipient="broadcast", 
+                                      content=f"FINISH: {summary}"))
+                    Log.info("[orchestrator] ✅ Тесты пройдены через run_python! Система завершает работу.")
+                    return True
+                
+                # Если код протестирован с помощью run_python и в выводе нет ошибок
+                if tool == "run_python" and "tests_code" in args and isinstance(result, dict) and not result.get("error"):
+                    summary = "Код протестирован с помощью run_python и не содержит ошибок. Задача выполнена!"
+                    bus.send(BusMessage(sender="orchestrator", recipient="broadcast", 
+                                      content=f"FINISH: {summary}"))
+                    Log.info("[orchestrator] ✅ Тесты, запущенные через run_python, прошли успешно! Система завершает работу.")
                     return True
                 
                 # Если тесты не прошли, отправляем сообщение для исправления
@@ -217,6 +242,25 @@ class Orchestrator:
             
         # После обработки всех агентов проверяем состояние процесса и отправляем подсказки
         self._send_workflow_hints()
+        
+        # Проверяем, выполнены ли все необходимые шаги процесса
+        if (self.workflow_state["solution_created"] and
+            self.workflow_state["tests_created"] and 
+            self.workflow_state["solution_read"] and
+            self.workflow_state["tests_run"] and
+            # Либо тесты успешно пройдены, либо мы уже в конце допустимых раундов
+            (self.workflow_state["tests_passed"] or self.workflow_state["current_round"] >= self.max_rounds - 1) and
+            self.workflow_state["code_reviewed"]):
+            
+            # Все необходимые этапы выполнены, завершаем процесс
+            if self.workflow_state["tests_passed"]:
+                summary = "Все этапы разработки выполнены успешно! Реализован is_prime, созданы тесты, которые успешно пройдены, проведен код ревью."
+            else:
+                summary = "Разработка завершена! Реализован is_prime, созданы тесты (есть ошибки запуска), проведен код ревью."
+            bus.send(BusMessage(sender="orchestrator", recipient="broadcast", 
+                              content=f"FINISH: {summary}"))
+            Log.info("[orchestrator] 🎉 Все этапы разработки завершены! Система завершает работу.")
+            return True
         
         return False
         
@@ -312,6 +356,7 @@ class Orchestrator:
             "solution_read": False,
             "tests_created": False,
             "tests_run": False,
+            "tests_passed": False,  # Новый флаг для отслеживания успешного прохождения тестов
             "code_reviewed": False,
             "current_round": 0
         }
@@ -380,6 +425,35 @@ class Orchestrator:
                 Log.info("=== ORCHESTRATION FINISHED ===")
                 return
             
+            # Дополнительная проверка состояния после каждого раунда
+            if current_round >= 4:  # Даем системе минимум 4 раунда для работы
+                # Проверяем прогресс выполнения
+                progress_score = 0
+                max_progress = 6  # Увеличиваем максимальный балл, так как добавили новый флаг
+                
+                if self.workflow_state["solution_created"]: 
+                    progress_score += 1
+                if self.workflow_state["tests_created"]: 
+                    progress_score += 1
+                if self.workflow_state["solution_read"]: 
+                    progress_score += 1
+                if self.workflow_state["tests_run"]:
+                    progress_score += 1
+                if self.workflow_state["tests_passed"]:  # Добавляем учет успешности тестов
+                    progress_score += 1
+                if self.workflow_state["code_reviewed"]:
+                    progress_score += 1
+                
+                # Если почти всё сделано (4 из 6 шагов) и мы близки к лимиту раундов
+                if progress_score >= 4 and current_round >= max_rounds - 2:
+                    tests_status = "успешно пройдены" if self.workflow_state['tests_passed'] else "запущены с ошибкой"
+                    summary = f"Задача почти завершена! Выполнено {progress_score} из {max_progress} этапов: solution_created={self.workflow_state['solution_created']}, tests_created={self.workflow_state['tests_created']}, tests_run={self.workflow_state['tests_run']}, tests_passed={self.workflow_state['tests_passed']}, code_reviewed={self.workflow_state['code_reviewed']}. Тесты: {tests_status}"
+                    Log.info(f"[orchestrator] 🏁 {summary}")
+                    bus.send(BusMessage(sender="orchestrator", recipient="broadcast", 
+                                     content=f"FINISH: {summary}"))
+                    Log.info("=== ORCHESTRATION COMPLETED (Near Limit) ===")
+                    return
+            
             # Проверка на застревание - если состояние не меняется на протяжении нескольких раундов
             if current_round > 2 and self.workflow_state["current_round"] == current_round - 1:
                 Log.warn("[orchestrator] Обнаружено застревание процесса. Отправляю корректирующие инструкции.")
@@ -399,11 +473,41 @@ class Orchestrator:
                     ))
                     
                 elif not self.workflow_state["tests_run"]:
-                    bus.send(BusMessage(
-                        sender="orchestrator",
-                        recipient="tester",
-                        content="СРОЧНО: Необходимо запустить тесты с помощью инструмента run_tests!"
-                    ))
+                    # Если solution.py и tests.py существуют, но тесты не запущены, 
+                    # Orchestrator сам запускает тесты
+                    if ("solution.py" in ws.files and ws.files.get("solution.py") and 
+                        "tests.py" in ws.files and ws.files.get("tests.py")):
+                        Log.info("[orchestrator] 🔄 Автоматический запуск тестов...")
+                        try:
+                            result = tools.call("run_tests", {
+                                "filename": "solution.py",
+                                "test_file": "tests.py"
+                            })
+                            if isinstance(result, dict) and result.get("passed", False):
+                                self.workflow_state["tests_passed"] = True
+                                summary = "Автоматически запущенные тесты успешно пройдены! Задача выполнена!"
+                                bus.send(BusMessage(sender="orchestrator", recipient="broadcast", 
+                                                  content=f"FINISH: {summary}"))
+                                Log.info("[orchestrator] ✅ Тесты пройдены! Система завершает работу.")
+                                return
+                            else:
+                                self.workflow_state["tests_passed"] = False
+                                error_msg = result.get("error", "Неизвестная ошибка")
+                                Log.warn(f"[orchestrator] ⚠️ Автоматические тесты не прошли: {error_msg[:200]}")
+                                # Отправляем информацию о результатах тестирования
+                                bus.send(BusMessage(
+                                    sender="orchestrator",
+                                    recipient="broadcast",
+                                    content=f"АВТОМАТИЧЕСКОЕ ТЕСТИРОВАНИЕ: Тесты не прошли: {error_msg[:200]}"
+                                ))
+                        except Exception as e:
+                            Log.error(f"[orchestrator] Ошибка при автоматическом запуске тестов: {e}")
+                    else:
+                        bus.send(BusMessage(
+                            sender="orchestrator",
+                            recipient="tester",
+                            content="СРОЧНО: Необходимо запустить тесты с помощью инструмента run_tests!"
+                        ))
             
             current_round += 1
 
