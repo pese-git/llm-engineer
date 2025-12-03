@@ -35,7 +35,8 @@ def run_python(code):
                 "str": str,
                 "bool": bool,
             },
-            "unittest": unittest
+            "unittest": unittest,
+            "__name__": "__main__"
         }
         exec(code, exec_globals)
         out["stdout"] = captured.getvalue()

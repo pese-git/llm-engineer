@@ -1,16 +1,29 @@
 from langgraph.graph import StateGraph, START, END
 from agents import planner_node, coder_node, tester_node, reviewer_node
 from tools import ws, get_tools
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 # GOAL
 GOAL = "Реализовать функцию is_prime(n: int) -> bool, которая проверяет, является ли число простым."
 
+
 def next_step(state):
-    """Управляет направлением потока исполнения по ключу 'next'."""
+    """Маршрутизация и лимит шагов."""
+    if 'num_steps' in state:
+        state['num_steps'] += 1
+    else:
+        state['num_steps'] = 1
+    if state['num_steps'] >= 20:
+        if 'log' in state:
+            state['log'].append('[SYSTEM] Recursion limit reached. Pipeline завершён аварийно!')
+        state['done'] = True
+        return END
     if state.get('done', False) or not state.get('next'):
         return END
     return state['next']
-
 # Сборка графа
 builder = StateGraph(dict)
 builder.add_node("planner", planner_node)
@@ -21,18 +34,9 @@ builder.add_node("reviewer", reviewer_node)
 builder.add_edge(START, "planner")
 
 # Весь flow идёт по ключу next_step(state)
-builder.add_conditional_edges(
-    "planner", next_step, ["coder", END]
-)
-builder.add_conditional_edges(
-    "coder", next_step, ["tester", END]
-)
-builder.add_conditional_edges(
-    "tester", next_step, ["reviewer", "coder", END]
-)
-builder.add_conditional_edges(
-    "reviewer", next_step, ["coder", END]
-)
+all_agents = ["planner", "coder", "tester", "reviewer", END]
+for agent in ["planner", "coder", "tester", "reviewer"]:
+    builder.add_conditional_edges(agent, next_step, [a for a in all_agents if a != agent])
 
 agent_graph = builder.compile()
 
