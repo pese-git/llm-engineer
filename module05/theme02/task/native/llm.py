@@ -8,10 +8,13 @@ class OpenAILLM:
         self.model = model
         self.client = OpenAI(**kwargs)
 
-    def complete(self, prompt: str, **kwargs) -> str:
+    def complete(self, messages, **kwargs) -> str:
+        # messages должен быть списком сообщений (чат-формат)
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
         resp = self.client.beta.chat.completions.parse(
             model=self.model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             temperature=kwargs.get("temperature", 0),
             max_completion_tokens=kwargs.get("max_tokens", 1024),
             response_format=kwargs.get("response_format", {"type": "text"})

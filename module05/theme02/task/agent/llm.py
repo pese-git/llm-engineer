@@ -9,21 +9,39 @@ from log import Log
 
 #os.environ["OPENROUTER_API_KEY"]="Your key here"
 
-DEFAULT_MODEL = "qwen/qwen3-30b-a3b-instruct-2507"  # можно поменять на совместимую с JSON schema
-openrouter_client = None
+DEFAULT_MODEL = "qwen/qwen3-30b-a3b-instruct-2507"  # по умолчанию, но можно использовать любую совместимую модель
+client = None
 
-if os.environ.get("OPENROUTER_API_KEY"):
+from openai import OpenAI
+
+# Приоритет: LLM_API_URL + LLM_API_KEY > OPENROUTER_API_KEY > fallback
+llm_api_url = os.environ.get("LLM_API_URL")
+llm_api_key = os.environ.get("LLM_API_KEY")
+openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
+
+if llm_api_url and llm_api_key:
     try:
-        from openai import OpenAI
-        openrouter_client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ["OPENROUTER_API_KEY"],
+        client = OpenAI(
+            base_url=llm_api_url.rstrip("/"),
+            api_key=llm_api_key,
         )
-        print("OpenRouter готов. Модель:", DEFAULT_MODEL)
+        DEFAULT_MODEL = "gpt-4.1"
+        Log.info(f"[LLM] Используется openai/openrouter-совместимый endpoint: {llm_api_url}")
     except Exception as e:
-        raise RuntimeError(f"Не удалось инициализировать OpenRouter: {e}")
+        raise RuntimeError(f"[LLM] Не удалось инициализировать endpoint {llm_api_url}: {e}")
+elif openrouter_api_key:
+    try:
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=openrouter_api_key,
+        )
+        DEFAULT_MODEL = "qwen/qwen3-30b-a3b-instruct-2507"
+        Log.info("[LLM] Используется OpenRouter endpoint с заданным ключом.")
+    except Exception as e:
+        raise RuntimeError(f"[LLM] Не удалось инициализировать OpenRouter: {e}")
 else:
-    raise RuntimeError("OPENROUTER_API_KEY не найден. Установите ключ в окружении: export OPENROUTER_API_KEY=...")
+    client = None
+    Log.warn("[LLM] LLM_API_URL/KEY и OPENROUTER_API_KEY не заданы. Активирован fallback режим!")
 
 # ---------------------------
 # LLM caller with JSON schema; retries on invalid JSON
@@ -93,8 +111,8 @@ def call_llm_with_schema(prompt: str, response_model: BaseModel, system_prompt: 
     """
     Log.debug(f"[LLM] Вызов с prompt: {prompt[:200]}, system_prompt: {system_prompt}, max_retries: {max_retries}")
 
-    if openrouter_client is None:
-        Log.warn("[LLM] OpenRouter не доступен, используется fallback_llm")
+    if client is None:
+        Log.warn("[LLM] Нет соединения с LLM endpoint, используется fallback_llm")
         return fallback_llm(prompt, response_model, system_prompt)
 
     messages = []
@@ -102,13 +120,34 @@ def call_llm_with_schema(prompt: str, response_model: BaseModel, system_prompt: 
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    schema_dict = response_model.model_json_schema()
+    # --- Fix: add required + additionalProperties: False into all objects recursively for API strict schema requirements ---
+    def fix_schema(schema):
+        if isinstance(schema, dict):
+            if schema.get("type") == "object":
+                schema["additionalProperties"] = False  # всегда явно False
+                # Обеспечить наличие required (пусть пуст, если свойств нет)
+                if "properties" in schema:
+                    prop_keys = list(schema["properties"].keys())
+                    schema["required"] = prop_keys
+                    # даже если нет свойств, ставим required=[]
+                    for v in schema["properties"].values():
+                        fix_schema(v)
+                else:
+                    schema["properties"] = {}
+                    schema["required"] = []
+            for v in schema.values():
+                fix_schema(v)
+        elif isinstance(schema, list):
+            for item in schema:
+                fix_schema(item)
+        return schema
+    schema_dict = fix_schema(response_model.model_json_schema())
     last_raw = ""
 
     for attempt in range(1, max_retries + 1):
         try:
             Log.debug(f"[LLM] Попытка {attempt}")
-            resp = openrouter_client.chat.completions.create(
+            resp = client.chat.completions.create(
                 model=DEFAULT_MODEL,
                 messages=messages,
                 response_format={

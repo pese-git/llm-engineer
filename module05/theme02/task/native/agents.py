@@ -30,19 +30,30 @@ class PlannerAgent(BaseAgent):
 
     def decide(self, context: dict) -> dict:
         if self.llm:
-            prompt = (
-                f"Задача: {context['task']}\nИстория:\n{context['history']}\n"
-                "Ответь строго JSON структурой для вызова инструментов:"
-                '{"action": "message", "recipient": "coder", "content": "Реализуй функцию is_prime(n: int) -> bool в solution.py через инструмент store_code! Сохрани решение ТОЛЬКО в solution.py. Не завершай выполнение, пока не вызван store_code."}'
-            )
-            result = self.llm.complete(prompt, response_format={"type": "json_object"})
-            # schema-validate через Pydantic (опционально, но good practice)
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты профессиональный 'PlannerAgent' мультиагентной системы. "
+                        "Твоя роль — выдавать только валидные JSON-инструкции для менеджера и кодера."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Task: {context['task']}\nИстория: {context['history']}\n"
+                        "Ответь СТРОГО одним JSON-объектом формата: "
+                        '{"action": "message", "recipient": "coder", "content": "Реализуй функцию is_prime(n: int) -> bool в solution.py через инструмент store_code! Сохрани решение ТОЛЬКО в solution.py. Не завершай выполнение, пока не вызван store_code."}'
+                    )
+                }
+            ]
+            result = self.llm.complete(messages=messages, response_format={"type": "json_object"})
             if isinstance(result, str):
                 try:
                     result = json.loads(result)
                 except Exception:
                     raise RuntimeError(f"LLM must answer pure JSON, got: {result}")
-                action_obj = AgentAction(**result)
+            action_obj = AgentAction(**result)
             return action_obj.dict()
         else:
             content = (
@@ -71,13 +82,30 @@ class CoderAgent(BaseAgent):
                     instructions.append(msg["content"])
                     break
             inst = instructions[0] if instructions else "Реализуй is_prime."
-            prompt = (
-                f'{inst}\n'
-                "Ответь строго JSON структурой для вызова инструментов:"
-                '{"action": "tool_call", "tool": "store_code", "params": {"filename": "solution.py", "code": "<CODE>"}, "recipient": "tester", "content": "Код загружен через store_code. Пора тестировать!"}. '
-                'Где <CODE> — только рабочий код функции is_prime на Python (без markdown и комментариев).'
-            )
-            result = self.llm.complete(prompt, response_format={"type": "json_object"})
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты исполняешь роль CoderAgent. Ты строго действуешь по JSON-инструкциям Planner или тестировщика."
+                        "Всегда выдавай ответ только в формате JSON для менеджера."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"{inst}\n"
+                        "Ответь СТРОГО JSON-структурой: "
+                        '{"action": "tool_call", "tool": "store_code", "params": {"filename": "solution.py", "code": "<CODE>"}, "recipient": "tester", "content": "Код загружен через store_code. Пора тестировать!"}'
+                        ' Где <CODE> — только рабочий код функции is_prime на Python (без markdown и комментариев).'
+                    )
+                }
+            ]
+            result = self.llm.complete(messages=messages, response_format={"type": "json_object"})
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except Exception:
+                    raise RuntimeError(f"LLM must answer pure JSON, got: {result}")
             return result
         else:
             code = (
@@ -105,14 +133,31 @@ class TesterAgent(BaseAgent):
 
     def decide(self, context: dict) -> dict:
         if self.llm:
-            prompt = (
-                """
-Сгенерируй юнит-тесты на Python к функции is_prime. Ответь строго JSON структурой для вызова инструментов:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты TesterAgent. Сейчас твоя задача — написать минимальные юнит-тесты для проверки решения is_prime. "
+                        "Ты должен обязательно CТРОГО возвращать JSON-структуру action/tool_call/params/recipient/content."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        """
+Важно! Сгенерируй юнит-тесты на Python к функции is_prime. Только без markdown, без комментариев. Возвращай только JSON той структуры, что указана ниже:
 {"action": "tool_call", "tool": "store_code", "params": {"filename": "test_solution.py", "code": "<TESTS>"}, "recipient": "reviewer", "content": "Тесты сохранены через store_code ('test_solution.py'). Запусти ревью!"}
-Где <TESTS> — минимальные рабочие тесты (без markdown и комментариев).
+Где <TESTS> — это рабочие автотесты.
 """
-            )
-            result = self.llm.complete(prompt, response_format={"type": "json_object"})
+                    )
+                }
+            ]
+            result = self.llm.complete(messages=messages, response_format={"type": "json_object"})
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except Exception:
+                    raise RuntimeError(f"LLM must answer pure JSON, got: {result}")
             return result
         else:
             tests = (

@@ -56,7 +56,7 @@ bus.send(BusMessage(sender="planner", recipient="broadcast",
 
 # Run orchestrator с порядком, начиная с тестировщика
 orch = Orchestrator()
-orch.run(goal, order=["planner", "coder", "tester", "reviewer"], max_rounds=10)
+orch.run(goal, order=["planner", "coder", "tester", "reviewer"], max_rounds=2)
 
 # After run, print workspace artifacts and last few messages
 Log.info(f"\nWorkspace files: { list(ws.files.keys())}")
