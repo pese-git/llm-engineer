@@ -1,13 +1,14 @@
-from typing import List, Dict, Any
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
+import json
 
 # Pydantic-схема сообщения между агентами и для инструментов
 class AgentAction(BaseModel):
     action: str  # 'message', 'tool_call', 'done'
-    recipient: str = None
-    content: str = None
-    tool: str = None
-    params: Dict[str, Any] = {}
+    recipient: Optional[str] = None
+    content: Optional[str] = None
+    tool: Optional[str] = None
+    params: Optional[Dict[str, Any]] = None
 
 class BaseAgent:
     name: str = ""
@@ -31,9 +32,18 @@ class PlannerAgent(BaseAgent):
         if self.llm:
             prompt = (
                 f"Задача: {context['task']}\nИстория:\n{context['history']}\n"
-                "Сформулируй как раздать задачу кодеру/следующему агенту краткой технической инструкцией, строго по клише для автоматического исполнения, не давая финального ответа, а только следующую подзадачу для coder."
+                "Ответь строго JSON структурой для вызова инструментов:"
+                '{"action": "message", "recipient": "coder", "content": "Реализуй функцию is_prime(n: int) -> bool в solution.py через инструмент store_code! Сохрани решение ТОЛЬКО в solution.py. Не завершай выполнение, пока не вызван store_code."}'
             )
-            content = self.llm.complete(prompt)
+            result = self.llm.complete(prompt, response_format={"type": "json_object"})
+            # schema-validate через Pydantic (опционально, но good practice)
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except Exception:
+                    raise RuntimeError(f"LLM must answer pure JSON, got: {result}")
+                action_obj = AgentAction(**result)
+            return action_obj.dict()
         else:
             content = (
                 "Реализуй функцию is_prime(n: int) -> bool в solution.py через инструмент store_code! "
@@ -62,9 +72,13 @@ class CoderAgent(BaseAgent):
                     break
             inst = instructions[0] if instructions else "Реализуй is_prime."
             prompt = (
-                f"{inst}\nНапиши полный код в формате Python-функции, коротко. Только функцию."
+                f'{inst}\n'
+                "Ответь строго JSON структурой для вызова инструментов:"
+                '{"action": "tool_call", "tool": "store_code", "params": {"filename": "solution.py", "code": "<CODE>"}, "recipient": "tester", "content": "Код загружен через store_code. Пора тестировать!"}. '
+                'Где <CODE> — только рабочий код функции is_prime на Python (без markdown и комментариев).'
             )
-            code = self.llm.complete(prompt)
+            result = self.llm.complete(prompt, response_format={"type": "json_object"})
+            return result
         else:
             code = (
                 "def is_prime(n: int) -> bool:\n"
@@ -92,9 +106,14 @@ class TesterAgent(BaseAgent):
     def decide(self, context: dict) -> dict:
         if self.llm:
             prompt = (
-                "Напиши краткие юнит-тесты в формате функций Python, проверяющих корректность is_prime."
+                """
+Сгенерируй юнит-тесты на Python к функции is_prime. Ответь строго JSON структурой для вызова инструментов:
+{"action": "tool_call", "tool": "store_code", "params": {"filename": "test_solution.py", "code": "<TESTS>"}, "recipient": "reviewer", "content": "Тесты сохранены через store_code ('test_solution.py'). Запусти ревью!"}
+Где <TESTS> — минимальные рабочие тесты (без markdown и комментариев).
+"""
             )
-            tests = self.llm.complete(prompt)
+            result = self.llm.complete(prompt, response_format={"type": "json_object"})
+            return result
         else:
             tests = (
                 "def test_is_prime():\n"

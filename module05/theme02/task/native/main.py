@@ -9,7 +9,7 @@ load_dotenv()
 def print_history(history):
     print("\n[Лог]")
     for step in history:
-        print(f"{step['from']} -> {step['to']}: {step['action']} {step.get('tool','')} {step.get('params','')} {step.get('content','')}")
+        print(f"{step['from']} -> {step['to']}: {step['action']} {step.get('tool','')} {step.get('params','')} {step.get('content','')}\n")
 
 def main():
     # Считываем токен и base_url (если есть)
@@ -27,12 +27,18 @@ def main():
     }
     current_agent = agent_map["planner"]
 
+    import json
     while True:
         out = current_agent.decide(context)
+        if isinstance(out, str):
+            try:
+                out = json.loads(out)
+            except Exception:
+                raise RuntimeError(f"Agent returned a string that is not JSON: {out}")
         step = {
             "from": current_agent.name,
             "to": out.get("recipient", ""),
-            "action": out["action"],
+            "action": out.get("action", ""),
             "tool": out.get("tool", ""),
             "params": out.get("params", {}),
             "content": out.get("content", ""),

@@ -9,10 +9,11 @@ class OpenAILLM:
         self.client = OpenAI(**kwargs)
 
     def complete(self, prompt: str, **kwargs) -> str:
-        resp = self.client.chat.completions.create(
+        resp = self.client.beta.chat.completions.parse(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=kwargs.get("temperature", 0.2),
-            max_tokens=kwargs.get("max_tokens", 300),
+            temperature=kwargs.get("temperature", 0),
+            max_completion_tokens=kwargs.get("max_tokens", 1024),
+            response_format=kwargs.get("response_format", {"type": "text"})
         )
         return resp.choices[0].message.content.strip()
