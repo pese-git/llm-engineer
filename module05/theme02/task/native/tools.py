@@ -41,7 +41,9 @@ def run_tests(filename: str = "solution.py", test_file: str = "test_solution.py"
         return result
     return "Все тесты пройдены!\n" + result
 
-def lint_code(code: str) -> str:
+def lint_code(code: str = None, **kwargs) -> str:
+    if not code:
+        return "Ошибка: от LLM не передан параметр code!"
     if "    " in code and "\t" in code:
         return "Смешаны табы и пробелы!"
     return "Стиль кода в порядке."

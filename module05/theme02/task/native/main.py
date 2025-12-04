@@ -44,7 +44,9 @@ def main():
             "content": out.get("content", ""),
         }
         context["history"].append(step)
-        print(f"\n[{step['from'].upper()} → {step['to'].upper()}] action={step['action']}, tool={step['tool']}")
+        from_ = str(step['from']).upper() if step['from'] else "<NONE>"
+        to_ = str(step['to']).upper() if step['to'] else "<NONE>"
+        print(f"\n[{from_} → {to_}] action={step['action']}, tool={step['tool']}")
         if step["content"]:
             print("Сообщение: ", step["content"])
 
