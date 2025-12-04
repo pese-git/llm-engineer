@@ -1,14 +1,22 @@
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from typing import Optional, List, Any
+from pydantic import BaseModel, Field
 import json
 
 # Pydantic-схема сообщения между агентами и для инструментов
 class AgentAction(BaseModel):
-    action: str  # 'message', 'tool_call', 'done'
-    recipient: Optional[str] = None
-    content: Optional[str] = None
-    tool: Optional[str] = None
-    params: Optional[Dict[str, Any]] = None
+    action: str = Field(..., description="Action type: 'message', 'tool_call', or 'done'")
+    recipient: str = Field(default=None, description="The next agent to receive control")
+    content: str = Field(default=None, description="Message for the next agent")
+    tool: str = Field(default=None, description="Which tool to call, if any")
+    params: dict = Field(default=dict, description="Parameters for the tool", json_schema_extra={"additionalProperties": False})
+
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            "required": ["action"],
+            "additionalProperties": False
+        }
+    }
 
 class BaseAgent:
     name: str = ""
@@ -47,14 +55,7 @@ class PlannerAgent(BaseAgent):
                     )
                 }
             ]
-            result = self.llm.complete(messages=messages, response_format={"type": "json_object"})
-            if isinstance(result, str):
-                try:
-                    result = json.loads(result)
-                except Exception:
-                    raise RuntimeError(f"LLM must answer pure JSON, got: {result}")
-            action_obj = AgentAction(**result)
-            return action_obj.dict()
+            return self.llm.complete(messages=messages, schema=AgentAction)
         else:
             content = (
                 "Реализуй функцию is_prime(n: int) -> bool в solution.py через инструмент store_code! "
@@ -100,13 +101,7 @@ class CoderAgent(BaseAgent):
                     )
                 }
             ]
-            result = self.llm.complete(messages=messages, response_format={"type": "json_object"})
-            if isinstance(result, str):
-                try:
-                    result = json.loads(result)
-                except Exception:
-                    raise RuntimeError(f"LLM must answer pure JSON, got: {result}")
-            return result
+            return self.llm.complete(messages=messages, schema=AgentAction)
         else:
             code = (
                 "def is_prime(n: int) -> bool:\n"
@@ -152,13 +147,7 @@ class TesterAgent(BaseAgent):
                     )
                 }
             ]
-            result = self.llm.complete(messages=messages, response_format={"type": "json_object"})
-            if isinstance(result, str):
-                try:
-                    result = json.loads(result)
-                except Exception:
-                    raise RuntimeError(f"LLM must answer pure JSON, got: {result}")
-            return result
+            return self.llm.complete(messages=messages, schema=AgentAction)
         else:
             tests = (
                 "def test_is_prime():\n"
