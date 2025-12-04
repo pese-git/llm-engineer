@@ -10,7 +10,11 @@ load_dotenv()
 def print_history(history):
     print("\n[Лог]")
     for step in history:
-        print(f"{step['from']} -> {step['to']}: {step['action']} {step.get('tool','')} {step.get('params','')} {step.get('content','')}\n")
+        sender = step.get('sender', '<NONE>')
+        recipient = step.get('recipient', '<NONE>')
+        action = step.get('meta', {}).get('action') or step.get('action', '')
+        content = step.get('content', '')
+        print(f"{sender} -> {recipient}: {action} {content}\n")
 
 def main():
     api_key = os.getenv("OPENAI_API_KEY")
@@ -18,7 +22,6 @@ def main():
     llm = OpenAILLM(model="gpt-4o", api_key=api_key, base_url=base_url)
     agents = get_agents(llm=llm)
     tools = get_tools()
-
     task = "Реализовать функцию is_prime(n: int) -> bool, которая проверяет, является ли число простым."
     orchestrator = Orchestrator(agents=agents, tools=tools, task=task)
     context = orchestrator.run()

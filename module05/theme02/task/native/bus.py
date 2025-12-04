@@ -1,31 +1,30 @@
 from collections import deque
+from sgr import BusMessage
 
 class Bus:
     """
-    Простейшая message bus-шина для мультиагентных взаимодействий.
-    Позволяет отправлять сообщения (steps), забирать сообщения для конкретного агента,
-    и хранит историю взаимодействий.
+    Message bus: публикует и отдаёт только объекты BusMessage
     """
     def __init__(self):
-        self._messages = deque()
+        self._messages = deque()  # только BusMessage
         self._history = []
 
-    def publish(self, message: dict):
+    def publish(self, message: BusMessage):
         """
-        Положить сообщение в очередь (step).
+        Положить строго BusMessage в очередь. Только BusMessage, иначе ошибка.
         """
+        if not isinstance(message, BusMessage):
+            raise TypeError("Bus.publish принимает только BusMessage!")
         self._messages.append(message)
         self._history.append(message)
 
     def get_next_for(self, agent_name: str):
         """
-        Забрать следующее сообщение для данного агента.
-        Возвращает None, если нет сообщений для агента.
+        Забрать следующее сообщение для агента. Возвращает BusMessage или None.
         """
         for idx, msg in enumerate(self._messages):
-            if msg.get("to") == agent_name:
+            if msg.recipient == agent_name:
                 found = msg
-                # удаляем по индексу через list(self._messages)
                 self._messages = deque([m for i, m in enumerate(self._messages) if i != idx])
                 return found
         return None
