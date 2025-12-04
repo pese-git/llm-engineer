@@ -78,10 +78,7 @@ class Orchestrator:
                 self.bus.publish(bus_message)
             # (2) use_tool — Orchestrator после успешного вызова baton-ит next agent
             elif action_type == "use_tool":
-                tool_result = None
-                if actual_step.tool_name in self.tools:
-                    tool_fn = self.tools[actual_step.tool_name]
-                    tool_result = tool_fn(**actual_step.args)
+                tool_result = self.tools.call(actual_step.tool_name, actual_step.args)
                 print(f"Tool '{actual_step.tool_name}' result:\n{tool_result}")
                 meta = {"action": action_type, "tool": actual_step.tool_name, "args": actual_step.args}
                 bus_message = BusMessage(
@@ -91,10 +88,28 @@ class Orchestrator:
                     meta=meta,
                 )
                 self.bus.publish(bus_message)
+                # Автоматический запуск run_tests после store_code тестов
+                if (
+                    current_agent.name == "tester"
+                    and actual_step.tool_name == "store_code"
+                    and actual_step.args.get("filename") == "test_solution.py"
+                ):
+                    print("[AUTO] Автозапуск run_tests от tester после создания test_solution.py")
+                    tool_result_run = self.tools.call(
+                        "run_tests", {"filename": "solution.py", "test_file": "test_solution.py"}
+                    )
+                    meta_run = {"action": "use_tool", "tool": "run_tests", "args": {"filename": "solution.py", "test_file": "test_solution.py"}}
+                    bus_message_run = BusMessage(
+                        sender=current_agent.name,
+                        recipient=current_agent.name,
+                        content=str(tool_result_run),
+                        meta=meta_run,
+                    )
+                    self.bus.publish(bus_message_run)
                 # Обработка неудачных тестов (эскалация и ретрай)
                 if actual_step.tool_name == "run_tests":
-                    # критерием успешности считаем строку, начинающуюся с "Все тесты пройдены!"
-                    if not (isinstance(tool_result, str) and tool_result.startswith("Все тесты пройдены!")):
+                    # критерием успешности считаем статус результата
+                    if not (isinstance(tool_result, dict) and tool_result.get("status") == "ok"):
                         self.retry_count += 1
                         self.last_test_fail = tool_result
                         if self.retry_count <= self.MAX_RETRIES:

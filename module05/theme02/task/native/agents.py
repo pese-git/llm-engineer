@@ -103,21 +103,52 @@ class TesterAgent(BaseAgent):
     def decide(self, context: dict):
         if not self.llm:
             raise RuntimeError("LLM is required for this agent!")
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Ты TesterAgent. Ответ ВСЕГДА должен быть СТРОГО ОДНИМ JSON-объектом: {\"action\": \"use_tool\", \"tool_name\": \"store_code\", \"args\": {\"filename\": \"test_solution.py\", \"code\": \"<TESTS>\"}}. "
-                    "Никаких массивов, никаких других полей, только эти ключи!"
-                )
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Сгенерируй юнит-тесты на Python к is_prime. Без markdown и комментариев. Задача: %s" % context['task']
-                )
-            }
-        ]
+
+        # Проверяем историю: если был store_code test_solution.py от tester — пора вызывать run_tests
+        test_file_created = False
+        for msg in reversed(context.get("history", [])):
+            if (
+                msg.get("sender") == "tester"
+                and msg.get("action", None) == "use_tool"
+                and msg.get("meta", {}).get("tool") == "store_code"
+                and msg.get("meta", {}).get("args", {}).get("filename") == "test_solution.py"
+            ):
+                test_file_created = True
+                break
+
+        if not test_file_created:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты TesterAgent. Если тесты ещё не созданы (нет файла 'test_solution.py'), ответь СТРОГО ОДНИМ JSON-объектом: {\"action\": \"use_tool\", \"tool_name\": \"store_code\", \"args\": {\"filename\": \"test_solution.py\", \"code\": \"<TESTS>\"}}. "
+                        "Если тесты уже созданы — обязательно вызови run_tests посредством: {\"action\": \"use_tool\", \"tool_name\": \"run_tests\", \"args\": {\"filename\": \"solution.py\", \"test_file\": \"test_solution.py\"}}."
+                        "Никаких массивов, никаких других полей!"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Задача: %s" % context["task"]
+                    )
+                }
+            ]
+        else:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты TesterAgent. Обнаружено, что файл тестов уже существует. Ответь СТРОГО ОДНИМ JSON-объектом: {\"action\": \"use_tool\", \"tool_name\": \"run_tests\", \"args\": {\"filename\": \"solution.py\", \"test_file\": \"test_solution.py\"}}. "
+                        "Никаких массивов, никаких других полей!"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Файл test_solution.py уже создан. Проверь решение (solution.py) с помощью этих тестов."
+                    )
+                }
+            ]
         out = self.llm.complete(messages=messages)
         if isinstance(out, str):
             out = json.loads(out)
