@@ -28,7 +28,7 @@ def ensure_not_null(out, agent_name="agent"):
 class PlannerAgent(BaseAgent):
     name = "planner"
     description = (
-        "Планирует задачу и делегирует первым шагом кодеру."
+        "Координирует всю мультиагентную работу; анализирует историю и решает, кому дальше отправить baton и с каким заданием. Может возвращать задачи на доработку."
     )
     tools: List[str] = []
 
@@ -39,13 +39,23 @@ class PlannerAgent(BaseAgent):
             {
                 "role": "system",
                 "content": (
-                    "Ты профессиональный 'PlannerAgent' мультиагентной системы. Отвечай СТРОГО валидным JSON: {\"action\": \"ask_agent\", \"target\": \"coder\", \"message\": \"Реализуй функцию…\"}"
+                    "Ты — PlannerAgent, менеджер мультиагентной системы. Твоя задача — после КАЖДОГО шага анализировать историю (history) и определять, кому и что делать дальше.\n"
+                    "Ты всегда формируешь только ОДИН валидный JSON-ответ: либо {\"action\": \"ask_agent\", \"target\": <агент>, \"message\": <подробное задание>}, либо — если ВСЁ ГОТОВО — {\"action\": \"finish\", \"summary\": <кратко результат>}\n"
+                    "ПРАВИЛА:\n"
+                    "- Если результат РЕВЬЮЕРА — ok (Стиль в порядке/стиль кода в порядке), baton -> finish: action='finish', summary='Все проверки пройдены, пайплайн завершён.'\n"
+                    "- Если результат ревьюера — ошибка стиля (issues/ошибка), baton -> coder, message='Стиль не пройден, исправь стиль.'\n"
+                    "- Если результат run_tests — ok (status=ok, все тесты прошли), baton -> reviewer, message='Проверь стиль кода (lint_code)'.\n"
+                    "- Если результат run_tests — ошибка (status!=ok), baton -> coder, message='Тесты не пройдены, доработай решение, затем сохрани и запусти тесты повторно.'\n"
+                    "- Если последний шаг tester был успешно store_code (test_solution.py) — теперь baton -> tester, message='Выполни инструмент run_tests (solution.py, test_solution.py)' (не повторяй store_code подряд).\n"
+                    "- Если последний шаг coder — store_code, baton -> tester, message='Сгенерируй юнит-тесты на solution.py, сохрани их как test_solution.py, без комментариев и markdown.'\n"
+                    "- Baton всегда можешь вернуть любому агента при ошибке или для доработки.\n"
+                    "- Message всегда четко: либо сохрани, либо запусти, либо исправь, либо заверши.\n"
                 )
             },
             {
                 "role": "user",
                 "content": (
-                    f"Task: {context['task']}\nИстория: {context['history']}"
+                    f"Задача: {context['task']}\nИстория действий: {context['history']}"
                 )
             }
         ]
@@ -53,6 +63,11 @@ class PlannerAgent(BaseAgent):
         if isinstance(out, str):
             out = json.loads(out)
         ensure_not_null(out, "PlannerAgent")
+        # finish или ask_agent (выбираем по action)
+        if out.get("action") == "finish":
+            from sgr import Finish
+            step = Finish(action="finish", summary=out.get("summary", "Готово"))
+            return AgentStep(step=step)
         ensure_keys(out, ["action", "target", "message"], "PlannerAgent")
         step = AskAgent(**out)
         return AgentStep(step=step)
@@ -103,52 +118,36 @@ class TesterAgent(BaseAgent):
     def decide(self, context: dict):
         if not self.llm:
             raise RuntimeError("LLM is required for this agent!")
-
-        # Проверяем историю: если был store_code test_solution.py от tester — пора вызывать run_tests
-        test_file_created = False
-        for msg in reversed(context.get("history", [])):
-            if (
-                msg.get("sender") == "tester"
-                and msg.get("action", None) == "use_tool"
-                and msg.get("meta", {}).get("tool") == "store_code"
-                and msg.get("meta", {}).get("args", {}).get("filename") == "test_solution.py"
-            ):
-                test_file_created = True
+        # Детект задачи от PlannerAgent: если нужно запустить тесты — делаем run_tests
+        last_message = ""
+        history = context.get("history", [])
+        # ищем последнее message для tester из истории
+        for entry in reversed(history):
+            if entry.get("recipient") == "tester":
+                last_message = entry.get("content", "")
                 break
-
-        if not test_file_created:
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты TesterAgent. Если тесты ещё не созданы (нет файла 'test_solution.py'), ответь СТРОГО ОДНИМ JSON-объектом: {\"action\": \"use_tool\", \"tool_name\": \"store_code\", \"args\": {\"filename\": \"test_solution.py\", \"code\": \"<TESTS>\"}}. "
-                        "Если тесты уже созданы — обязательно вызови run_tests посредством: {\"action\": \"use_tool\", \"tool_name\": \"run_tests\", \"args\": {\"filename\": \"solution.py\", \"test_file\": \"test_solution.py\"}}."
-                        "Никаких массивов, никаких других полей!"
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Задача: %s" % context["task"]
-                    )
-                }
-            ]
-        else:
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты TesterAgent. Обнаружено, что файл тестов уже существует. Ответь СТРОГО ОДНИМ JSON-объектом: {\"action\": \"use_tool\", \"tool_name\": \"run_tests\", \"args\": {\"filename\": \"solution.py\", \"test_file\": \"test_solution.py\"}}. "
-                        "Никаких массивов, никаких других полей!"
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Файл test_solution.py уже создан. Проверь решение (solution.py) с помощью этих тестов."
-                    )
-                }
-            ]
+        if any(key in last_message.lower() for key in ["run_tests", "запусти тест", "запусти тесты", "test_solution.py, чтобы убедиться", "выполни инструмент run_tests"]):
+            return AgentStep(step=UseTool(action="use_tool", tool_name="run_tests", args={
+                "filename": "solution.py",
+                "test_file": "test_solution.py"
+            }))
+        # иначе стандартное поведение (генерация тестов)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Ты TesterAgent. Если тесты ещё не созданы (нет файла 'test_solution.py'), ответь СТРОГО ОДНИМ JSON-объектом: {\"action\": \"use_tool\", \"tool_name\": \"store_code\", \"args\": {\"filename\": \"test_solution.py\", \"code\": \"<TESTS>\"}}. "
+                    "Если тесты уже созданы — обязательно вызови run_tests посредством: {\"action\": \"use_tool\", \"tool_name\": \"run_tests\", \"args\": {\"filename\": \"solution.py\", \"test_file\": \"test_solution.py\"}}. "
+                    "Никаких массивов, никаких других полей, только эти ключи!"
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Задача: %s" % context["task"]
+                )
+            }
+        ]
         out = self.llm.complete(messages=messages)
         if isinstance(out, str):
             out = json.loads(out)
