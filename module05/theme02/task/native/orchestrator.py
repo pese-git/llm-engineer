@@ -19,6 +19,10 @@ class Orchestrator:
             "tester": "reviewer",
             "reviewer": "manager",
         }
+        # Для ретраев и эскалации (фиксируется на уровне всего процесса)
+        self.MAX_RETRIES = 3
+        self.retry_count = 0
+        self.last_test_fail = None
 
     def run(self):
         # Первое сообщение для старта пайплайна — Planner даёт задание Coder
@@ -87,6 +91,37 @@ class Orchestrator:
                     meta=meta,
                 )
                 self.bus.publish(bus_message)
+                # Обработка неудачных тестов (эскалация и ретрай)
+                if actual_step.tool_name == "run_tests":
+                    # критерием успешности считаем строку, начинающуюся с "Все тесты пройдены!"
+                    if not (isinstance(tool_result, str) and tool_result.startswith("Все тесты пройдены!")):
+                        self.retry_count += 1
+                        self.last_test_fail = tool_result
+                        if self.retry_count <= self.MAX_RETRIES:
+                            print(f"[RETRY] Тесты не пройдены! Возврат кодеру. Попытка {self.retry_count}/{self.MAX_RETRIES}")
+                            retry_message = BusMessage(
+                                sender="tester",
+                                recipient="coder",
+                                content=f"Тесты не пройдены (попытка {self.retry_count}/{self.MAX_RETRIES}):\n{tool_result}",
+                                meta={"action": "ask_agent", "retry": self.retry_count}
+                            )
+                            self.bus.publish(retry_message)
+                            continue  # не baton'им дальше, а возвращаем codеру задачу
+                        else:
+                            print(f"[FAIL] Тесты так и не пройдены за {self.MAX_RETRIES} попыток. Останавливаемся.")
+                            fail_finish = Finish(action="finish", summary=f"Не удалось пройти тесты за {self.MAX_RETRIES} попыток. Последняя ошибка: {tool_result}")
+                            fail_message = BusMessage(
+                                sender="tester",
+                                recipient="manager",
+                                content=fail_finish.summary,
+                                meta={"action": "finish", "fail": True}
+                            )
+                            self.bus.publish(fail_message)
+                            print("\n=== Процесс завершен с ошибкой! ===\n")
+                            break
+                    else:
+                        self.retry_count = 0
+                        self.last_test_fail = None
                 # Baton (если не последний агент)
                 if baton_recipient and baton_recipient != "manager":
                     baton_message = BusMessage(
